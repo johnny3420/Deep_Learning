@@ -64,15 +64,6 @@ shuffle = Whether to shuffle the samples or draw them in chronological order.
 batch_size = The number of samples per batch.
 step = The period, in timesteps, at which you sample data
 
-```{r}
-#Make data long?
-data_long <- data %>%
-  data.frame() %>%
-  pivot_longer(BUDAPEST:ZALA, names_to = "County", values_to = "Cases")
-data_long_matrix <- data.matrix(data_long[,-1])
-(418 * 20) # first 8360 rows are the first 8 years
-```
-
 
 ```{r}
 #Build Generator
@@ -105,33 +96,33 @@ generator <- function(data, lookback, delay, min_index, max_index,
 ```
 
 ```{r}
-lookback <- 1
+lookback <- 4
 step <- 1
-delay <- 1
-batch_size <- 32
+delay <- 2
+batch_size <- 16
 train_gen <- generator(
-  data_long_matrix,
+  data,
   lookback = lookback,
   delay = delay,
   min_index = 1,
-  max_index = 8360,
+  max_index = 418,
   shuffle = TRUE,
   step = step,
   batch_size = batch_size
 )
 val_gen = generator(
-  data_long_matrix,
+  data,
   lookback = lookback,
   delay = delay,
-  min_index = 8361,
-  max_index = 10440,
+  min_index = 419,
+  max_index = 522,
   step = step,
   batch_size = batch_size
 )
 ```
 
 ```{r}
-val_steps <- (10440 - 8361 - lookback) / batch_size
+val_steps <- (522 - 419 - lookback) / batch_size
 ```
 
 ```{r}
@@ -154,7 +145,67 @@ evaluate_naive_method()
 
 ```{r}
 model <- keras_model_sequential() %>%
-  layer_flatten(input_shape = c(lookback / step, dim(data_long_matrix)[-1])) %>%
+  layer_flatten(input_shape = c(lookback / step, dim(data)[-1])) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1)
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mae"
+)
+history <- model %>% fit(
+  train_gen,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+```
+
+```{r}
+plot(history)
+```
+
+Repeat with different parameters
+
+```{r}
+lookback <- 12
+step <- 1
+delay <- 2
+batch_size <- 32
+train_gen <- generator(
+  data,
+  lookback = lookback,
+  delay = delay,
+  min_index = 1,
+  max_index = 418,
+  shuffle = TRUE,
+  step = step,
+  batch_size = batch_size
+)
+val_gen = generator(
+  data,
+  lookback = lookback,
+  delay = delay,
+  min_index = 419,
+  max_index = 522,
+  step = step,
+  batch_size = batch_size
+)
+val_steps <- (522 - 419 - lookback) / batch_size
+# baseline
+evaluate_naive_method <- function() {
+  batch_maes <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% val_gen()
+    preds <- samples[,dim(samples)[[2]],1]
+    mae <- mean(abs(preds - targets))
+    batch_maes <- c(batch_maes, mae)
+  }
+  print(mean(batch_maes))
+}
+evaluate_naive_method()
+model <- keras_model_sequential() %>%
+  layer_flatten(input_shape = c(lookback / step, dim(data)[-1])) %>%
   layer_dense(units = 32, activation = "relu") %>%
   layer_dense(units = 1)
 model %>% compile(
@@ -175,6 +226,75 @@ plot(history)
 ```
 
 
+
 4. Recode the data so that you can make predicition for all counties 2 weeks in the future.  Be sure to include a baseline model for comparison.
+
+Right now it's training and validation on Budapest alone. Need to either replicate for all 20 counties or combine all together 
+
+```{r}
+#Make data long?
+data_long <- data %>%
+  data.frame() %>%
+  pivot_longer(BUDAPEST:ZALA, names_to = "County", values_to = "Cases")
+data_long_matrix <- data.matrix(data_long[,-1])
+(418 * 20) # first 8360 rows are the first 8 years and every 20 entries is a week
+
+```
+
+```{r}
+lookback <- 40
+step <- 20
+delay <- 2
+batch_size <- 128
+train_gen <- generator(
+  data_long_matrix,
+  lookback = lookback,
+  delay = delay,
+  min_index = 1,
+  max_index = 8360,
+  shuffle = TRUE,
+  step = step,
+  batch_size = batch_size
+)
+val_gen = generator(
+  data_long_matrix,
+  lookback = lookback,
+  delay = delay,
+  min_index = 8361,
+  max_index = 10440,
+  step = step,
+  batch_size = batch_size
+)
+val_steps <- (10440 - 8361 - lookback) / batch_size
+# baseline
+evaluate_naive_method <- function() {
+  batch_maes <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% val_gen()
+    preds <- samples[,dim(samples)[[2]],1]
+    mae <- mean(abs(preds - targets))
+    batch_maes <- c(batch_maes, mae)
+  }
+  print(mean(batch_maes))
+}
+evaluate_naive_method()
+model <- keras_model_sequential() %>%
+  layer_flatten(input_shape = c(lookback / step, dim(data_long_matrix)[-1])) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1)
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mae"
+)
+history <- model %>% fit(
+  train_gen,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+plot(history)
+```
+
 
 5. If you are getting good predictions, how good can you do at 1 month?  If predictions are poor maybe try going down to 1 week.
