@@ -170,6 +170,10 @@ history <- model %>% fit(
 )
 ```
 
+```{r}
+plot(history)
+```
+
 
 4. Recode the data so that you can make predicition for all counties 2 weeks in the future.  Be sure to include a baseline model for comparison.
 
