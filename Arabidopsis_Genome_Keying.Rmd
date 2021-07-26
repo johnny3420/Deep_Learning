@@ -1,0 +1,56 @@
+---
+title: "Arabidopsis_Genome_Keying"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=F}
+library(tidyverse)
+library(GenomicRanges)
+library(GenomicFeatures)
+library(Biostrings)
+```
+
+```{r}
+#Load in chromosome 1
+chr1 <- readDNAStringSet("Arabidopsis/TAIR10_chr1.fas")
+head(chr1)
+```
+
+```{r}
+# Load in annotations
+txdb <- makeTxDbFromGFF("Arabidopsis/TAIR10_GFF3_genes.gff.txt", format="gff3")
+```
+
+```{r}
+head(seqlevels(txdb))
+```
+```{r}
+seqlevels(txdb) <- "Chr1"
+seqlevels(txdb)
+```
+
+
+```{r}
+cds <- cds(txdb)
+cds
+```
+
+
+```{r}
+starts_and_ends <- paste(start(cds),end(cds), sep = ":")
+starts_and_ends.s <- paste(starts_and_ends, collapse = ",")
+chr1_listed <- as.character(unlist(chr1))
+chr1_unlisted <- unlist(strsplit(chr1_listed, ""))
+eval(parse(text=(paste("names(chr1_unlisted)[c(",noquote(starts_and_ends.s),")] <- 'CDS'", sep = ""))))
+names(chr1_unlisted)[is.na(names(chr1_unlisted))] <- "Not_CDS"
+```
+
+```{r}
+chr_1_Key <- chr1_unlisted
+width(chr1) == sum(names(chr_1_Key) == "CDS") + sum(names(chr_1_Key) == "Not_CDS")
+save(chr_1_Key, file = "Arabidopsis/chr1Key.RData")
+```
