@@ -54,3 +54,11 @@ chr_1_Key <- chr1_unlisted
 width(chr1) == sum(names(chr_1_Key) == "CDS") + sum(names(chr_1_Key) == "Not_CDS")
 save(chr_1_Key, file = "Arabidopsis/chr1Key.RData")
 ```
+
+```{r}
+dat <- data.frame(Position = 1:length(chr_1_Key),
+                  Base = chr_1_Key,
+                  CDS = names(chr_1_Key))
+head(dat)
+```
+
