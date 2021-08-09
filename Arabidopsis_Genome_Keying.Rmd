@@ -37,6 +37,7 @@ seqlevels(txdb)
 
 ```{r}
 cds <- cds(txdb)
+cds <- cds[strand(cds) == "+",]
 cds
 ```
 
