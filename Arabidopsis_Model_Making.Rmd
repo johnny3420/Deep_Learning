@@ -1,0 +1,147 @@
+---
+title: "Arabidopsis_Model_Making"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=F}
+library(tidyverse)
+library(GenomicRanges)
+library(GenomicFeatures)
+library(Biostrings)
+library(keras)
+```
+
+```{r}
+#Load 1 Hot Data
+load("Arabidopsis/chr1Hot.RData")
+head(chr_1_Hot)
+data <- data.matrix(chr_1_Hot[,-1])
+head(data)
+```
+
+```{r}
+# Using Julin's base generator
+generator <- function(data, # Input data
+                      flanking, # How many bases on each side to capture
+                      delay=0, # Base we want to predict on
+                      min_index, # Lowest position to use
+                      max_index, # Largest index position to use
+                      shuffle = FALSE, # If order of sampling matters, no in this case
+                      batch_size = 32, # Samples per a batch
+                      step = 1) { # How often we want to sample to sample data, 1 for every base
+  
+  if (is.null(max_index))
+    max_index <- nrow(data) - delay - window - 1
+  i <- min_index + window
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+window):max_index), size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + window
+      rows <- c(i:min(i+batch_size, max_index))
+      i <<- i + length(rows)
+    }
+    
+    samples <- array(0, dim = c(length(rows), 
+                                window / step,
+                                2* (dim(data)[[-1]]-1))) # don't include CDS in samples, do include data from forward and backwards
+    targets <- array(0, dim = c(length(rows)))
+                     
+    for (j in 1:length(rows)) {
+      indices.bak <- seq(rows[[j]] - window + 1, rows[[j]],  #why do I need +1?  error in original?
+                     length.out = dim(samples)[[2]])
+      indices.for <- indices.bak+window
+      # indices.bak go from -window to the focal position
+      # indices.for for from (1+the focal position) to (1+focal+window)
+      
+      #now each row of samples has data from before and after the focal base, getting progressively further away
+      samples[j,,] <- cbind(data[indices.bak, -1 ], # -1 = don't include CDS in samples
+                            data[indices.for, -1 ])
+      
+      targets[[j]] <- data[rows[[j]] + delay,1]
+    }            
+    
+    list(samples, targets)
+  }
+}
+```
+
+```{r}
+window <- 125
+step <- 1
+delay <- 0
+batch_size <- 128
+train_gen <- generator(
+  data,
+  window = window,
+  delay = delay,
+  min_index = 1,
+  max_index = 5000000,
+  shuffle = TRUE,
+  step = step,
+  batch_size = batch_size
+)
+val_gen = generator(
+  data,
+  window = window,
+  delay = delay,
+  min_index = 5000001,
+  max_index = 5100000,
+  step = step,
+  batch_size = batch_size
+)
+test_gen <- generator(
+  data,
+  window = window,
+  delay = delay,
+  min_index = 5100001,
+  max_index = 6000000,
+  step = step,
+  batch_size = batch_size
+)
+val_steps <- (5100000 - 5000001 - window) / batch_size               
+test_steps <- (6000000 - 5100001 - window) / batch_size
+```
+
+```{r}
+# Do generators work?
+evaluate_naive_method <- function() {
+  batch_acc <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% val_gen()
+    preds <- samples[,dim(samples)[[2]],1]
+    acc <- sum(preds == targets)/length(preds)*100
+    batch_acc <- c(batch_acc, acc)
+  }
+  print(mean(batch_acc))
+}
+evaluate_naive_method()
+```
+
+
+```{r}
+# Model 1
+model <- keras_model_sequential() %>%
+  layer_flatten(input_shape = c(lookback / step, dim(chr_1_Hot)[-1])) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1)
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mae"
+)
+history <- model %>% fit_generator(
+  train_gen,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+```
+
+
+
