@@ -25,6 +25,7 @@ head(data)
 
 ```{r}
 # Using Julin's base generator
+# nrow(data) = 30427671
 generator <- function(data, # Input data
                       flanking, # How many bases on each side to capture
                       delay=0, # Base we want to predict on
@@ -33,36 +34,38 @@ generator <- function(data, # Input data
                       shuffle = FALSE, # If order of sampling matters, no in this case
                       batch_size = 32, # Samples per a batch
                       step = 1) { # How often we want to sample to sample data, 1 for every base
-  
   if (is.null(max_index))
-    max_index <- nrow(data) - delay - window - 1
-  i <- min_index + window
+    max_index <- nrow(data) - delay - flanking - 1
+  i <- min_index + flanking
   function() {
     if (shuffle) {
-      rows <- sample(c((min_index+window):max_index), size = batch_size)
+      rows <- sample(c((min_index+flanking):max_index), size = batch_size)
     } else {
       if (i + batch_size >= max_index)
-        i <<- min_index + window
+        i <<- min_index + flanking
       rows <- c(i:min(i+batch_size, max_index))
       i <<- i + length(rows)
     }
     
     samples <- array(0, dim = c(length(rows), 
-                                window / step,
+                                flanking / step,
                                 2* (dim(data)[[-1]]-1))) # don't include CDS in samples, do include data from forward and backwards
     targets <- array(0, dim = c(length(rows)))
                      
     for (j in 1:length(rows)) {
-      indices.bak <- seq(rows[[j]] - window + 1, rows[[j]],  #why do I need +1?  error in original?
+      indices.bak <- seq(rows[[j]] - flanking + 1, rows[[j]],  #why do I need +1?  error in original?
                      length.out = dim(samples)[[2]])
-      indices.for <- indices.bak+window
+      indices.for <- indices.bak+flanking
       # indices.bak go from -window to the focal position
       # indices.for for from (1+the focal position) to (1+focal+window)
-      
+      # Looking at 149 before the focal position, focal position, then 150 after focal
       #now each row of samples has data from before and after the focal base, getting progressively further away
+      #samples[j,,] <- cbind(data[indices.bak, -1 ], # -1 = don't include CDS in samples
+      #                      data[indices.for, -1 ])
+      # Is this appropriate? row 1 is c(-window, focal + 1)
+      # Would working outside in work better?
       samples[j,,] <- cbind(data[indices.bak, -1 ], # -1 = don't include CDS in samples
-                            data[indices.for, -1 ])
-      
+                            data[rev(indices.for), -1 ])
       targets[[j]] <- data[rows[[j]] + delay,1]
     }            
     
@@ -72,13 +75,13 @@ generator <- function(data, # Input data
 ```
 
 ```{r}
-window <- 125
+flanking <- 125
 step <- 1
 delay <- 0
-batch_size <- 128
+batch_size <- 32
 train_gen <- generator(
   data,
-  window = window,
+  flanking = flanking,
   delay = delay,
   min_index = 1,
   max_index = 5000000,
@@ -88,7 +91,7 @@ train_gen <- generator(
 )
 val_gen = generator(
   data,
-  window = window,
+  flanking = flanking,
   delay = delay,
   min_index = 5000001,
   max_index = 5100000,
@@ -97,51 +100,117 @@ val_gen = generator(
 )
 test_gen <- generator(
   data,
-  window = window,
+  flanking = flanking,
   delay = delay,
   min_index = 5100001,
   max_index = 6000000,
   step = step,
   batch_size = batch_size
 )
-val_steps <- (5100000 - 5000001 - window) / batch_size               
-test_steps <- (6000000 - 5100001 - window) / batch_size
+val_steps <- (5100000 - 5000001 - flanking) / batch_size               
+test_steps <- (6000000 - 5100001 - flanking) / batch_size
 ```
 
 ```{r}
 # Do generators work?
-evaluate_naive_method <- function() {
-  batch_acc <- c()
-  for (step in 1:val_steps) {
-    c(samples, targets) %<-% val_gen()
-    preds <- samples[,dim(samples)[[2]],1]
-    acc <- sum(preds == targets)/length(preds)*100
-    batch_acc <- c(batch_acc, acc)
-  }
-  print(mean(batch_acc))
-}
-evaluate_naive_method()
+# Can't use this method because we excluded cds so we can't compare
+# evaluate_naive_method <- function() {
+#   batch_acc <- c()
+#   for (step in 1:val_steps) {
+#     c(samples, targets) %<-% val_gen()
+#     preds <- samples[,dim(samples)[[2]],1]
+#     acc <- sum(preds == targets)/length(preds)*100
+#     batch_acc <- c(batch_acc, acc)
+#   }
+#   print(mean(batch_acc))
+# }
+# evaluate_naive_method()
 ```
 
+Given the binary structure of the problem, we want a model to do better than 50% for the baseline
 
 ```{r}
-# Model 1
+# Model 1 Modified listing Listing 6.37
+# model <- keras_model_sequential() %>%
+#   layer_flatten(input_shape = c(flanking / step, dim(data)[-1])) %>%
+#   layer_dense(units = 32, activation = "sigmoid") %>%
+#   layer_dense(units = 1)
+# model %>% compile(
+#   optimizer = "rmsprop",
+#   loss = "binary_crossentropy",
+#   metrics = c("accuracy")
+# )
+# history <- model %>% fit(
+#   train_gen,
+#   steps_per_epoch = 200,
+#   epochs = 20,
+#   validation_data = val_gen,
+#   validation_steps = val_steps
+# )
+```
+
+```{r}
+# Model 2 Modified listing Listing 6.39
 model <- keras_model_sequential() %>%
-  layer_flatten(input_shape = c(lookback / step, dim(chr_1_Hot)[-1])) %>%
-  layer_dense(units = 32, activation = "relu") %>%
-  layer_dense(units = 1)
+  layer_gru(units = 32,
+            input_shape = list(NULL, dim(data)[[-1]]),
+            recurrent_activation = "sigmoid",
+            use_bias = TRUE,
+            reset_after = TRUE) %>%
+  layer_dense(units = 1, activation = "sigmoid")
 model %>% compile(
-  optimizer = optimizer_rmsprop(),
-  loss = "mae"
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("accuracy")
 )
-history <- model %>% fit_generator(
+system.time({
+  history <- model %>% fit(
   train_gen,
   steps_per_epoch = 500,
   epochs = 20,
   validation_data = val_gen,
   validation_steps = val_steps
 )
+})
+plot(history)
 ```
 
-
+```{r}
+# Model 3 Modified listing Listing 6.40
+model <- keras_model_sequential() %>%
+  layer_gru(units = 32,
+            dropout = 0.1,
+            activation = "tanh",
+            recurrent_dropout = 0,
+            unroll = F,
+            return_sequences = TRUE,
+            input_shape = list(NULL, dim(data)[[-1]]),
+            recurrent_activation = "sigmoid",
+            use_bias = TRUE,
+            reset_after = TRUE) %>%
+  layer_gru(units = 64,
+            dropout = 0.1,
+            activation = "tanh",
+            recurrent_dropout = 0,
+            unroll = F,
+            input_shape = list(NULL, dim(data)[[-1]]),
+            recurrent_activation = "sigmoid",
+            use_bias = TRUE,
+            reset_after = TRUE) %>%
+  layer_dense(units = 1, activation = "sigmoid")
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("accuracy")
+)
+system.time({history <- model %>% fit(
+  train_gen,
+  steps_per_epoch = 500,
+  epochs = 40,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+})
+plot(history)
+```
 
