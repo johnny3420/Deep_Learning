@@ -12,6 +12,7 @@ library(tidyverse)
 library(GenomicRanges)
 library(GenomicFeatures)
 library(Biostrings)
+library(caret)
 ```
 
 ```{r}
@@ -56,9 +57,18 @@ save(chr_1_Key, file = "Arabidopsis/chr1Key.RData")
 ```
 
 ```{r}
-dat <- data.frame(Position = 1:length(chr_1_Key),
+chr_1_Key <- data.frame(Position = 1:length(chr_1_Key),
                   Base = chr_1_Key,
-                  CDS = names(chr_1_Key))
-head(dat)
+                  CDS = names(chr_1_Key)) %>%
+  mutate(Base = ifelse(Base %in% c("A","C","G","T"), Base,"N"),
+         CDS = ifelse(CDS == "Not_CDS", 0, 1))
+```
+
+```{r}
+# 1 hot encode
+dummy <- dummyVars(" ~ .", data=chr_1_Key)
+chr_1_Hot <- data.frame(predict(dummy, newdata = chr_1_Key)) %>%
+  dplyr::select(Position,CDS,A=BaseA,C=BaseC,G=BaseG,T=BaseT,N=BaseN)
+save(chr_1_Hot, file = "Arabidopsis/chr1Hot.RData")
 ```
 
