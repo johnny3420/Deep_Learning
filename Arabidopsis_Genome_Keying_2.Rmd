@@ -1,0 +1,117 @@
+---
+title: "Arabidopsis_Genome_Keying_2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=F}
+library(tidyverse)
+library(GenomicRanges)
+library(GenomicFeatures)
+library(Biostrings)
+library(caret)
+```
+
+```{r}
+#Load in chromosome 1
+chr1 <- readDNAStringSet("Arabidopsis/TAIR10_chr1.fas")
+head(chr1)
+```
+
+```{r}
+# Load in annotations
+txdb <- makeTxDbFromGFF("Arabidopsis/TAIR10_GFF3_genes.gff.txt", format="gff3")
+```
+
+```{r}
+head(seqlevels(txdb))
+```
+# Set up Chr1
+```{r}
+seqlevels(txdb) <- "Chr1"
+seqlevels(txdb)
+cds <- cds(txdb)
+pcds <- cds[strand(cds) == "+",]
+pcds
+ncds <- cds[strand(cds) == "-",]
+ncds
+pstarts_and_ends <- paste(start(pcds),end(pcds), sep = ":")
+pstarts_and_ends.s <- paste(pstarts_and_ends, collapse = ",")
+nstarts_and_ends <- paste(start(ncds),end(ncds), sep = ":")
+nstarts_and_ends.s <- paste(nstarts_and_ends, collapse = ",")
+chr1_listed <- as.character(unlist(chr1))
+chr1_unlisted <- unlist(strsplit(chr1_listed, ""))
+pchr1_unlisted <- chr1_unlisted
+nchr1_unlisted <- chr1_unlisted
+eval(parse(text=(paste("names(pchr1_unlisted)[c(",noquote(pstarts_and_ends.s),")] <- '1'", sep = ""))))
+names(pchr1_unlisted)[is.na(names(pchr1_unlisted))] <- "0"
+eval(parse(text=(paste("names(nchr1_unlisted)[c(",noquote(nstarts_and_ends.s),")] <- '1'", sep = ""))))
+names(nchr1_unlisted)[is.na(names(nchr1_unlisted))] <- "0"
+chr_1_Key <- data.frame(Position = 1:length(chr1_unlisted),
+                  Base = chr1_unlisted,
+                  Pos = names(pchr1_unlisted),
+                  Neg = names(nchr1_unlisted)) %>%
+  mutate(Base = ifelse(Base %in% c("A","C","G","T"), Base,"N"),
+         Status = ifelse(Pos == 0 & Neg == 0, 1, ifelse(
+           Pos == 1 & Neg == 0, 2, ifelse(
+             Pos == 0 & Neg == 1, 3, 4
+         )))) %>%
+  dplyr::select(Position,Base,Status)
+
+# 1 hot encode
+dummy <- dummyVars(" ~ .", data=chr_1_Key)
+chr_1_Hot_2 <- data.frame(predict(dummy, newdata = chr_1_Key)) %>%
+  dplyr::select(Position,Status,A=BaseA,C=BaseC,G=BaseG,T=BaseT,N=BaseN)
+save(chr_1_Hot_2, file = "Arabidopsis/chr1Hot_2.RData")
+```
+
+# chr2
+```{r}
+#Load in chromosome 2
+chr1 <- readDNAStringSet("Arabidopsis/TAIR10_chr2.fas")
+head(chr1)
+```
+
+```{r}
+seqlevels(txdb) <- "Chr2"
+seqlevels(txdb)
+cds <- cds(txdb)
+pcds <- cds[strand(cds) == "+",]
+pcds
+ncds <- cds[strand(cds) == "-",]
+ncds
+pstarts_and_ends <- paste(start(pcds),end(pcds), sep = ":")
+pstarts_and_ends.s <- paste(pstarts_and_ends, collapse = ",")
+nstarts_and_ends <- paste(start(ncds),end(ncds), sep = ":")
+nstarts_and_ends.s <- paste(nstarts_and_ends, collapse = ",")
+chr1_listed <- as.character(unlist(chr1))
+chr1_unlisted <- unlist(strsplit(chr1_listed, ""))
+pchr1_unlisted <- chr1_unlisted
+nchr1_unlisted <- chr1_unlisted
+eval(parse(text=(paste("names(pchr1_unlisted)[c(",noquote(pstarts_and_ends.s),")] <- '1'", sep = ""))))
+names(pchr1_unlisted)[is.na(names(pchr1_unlisted))] <- "0"
+eval(parse(text=(paste("names(nchr1_unlisted)[c(",noquote(nstarts_and_ends.s),")] <- '1'", sep = ""))))
+names(nchr1_unlisted)[is.na(names(nchr1_unlisted))] <- "0"
+chr_1_Key <- data.frame(Position = 1:length(chr1_unlisted),
+                  Base = chr1_unlisted,
+                  Pos = names(pchr1_unlisted),
+                  Neg = names(nchr1_unlisted)) %>%
+  mutate(Base = ifelse(Base %in% c("A","C","G","T"), Base,"N"),
+         Status = ifelse(Pos == 0 & Neg == 0, 1, ifelse(
+           Pos == 1 & Neg == 0, 2, ifelse(
+             Pos == 0 & Neg == 1, 3, 4
+         )))) %>%
+  dplyr::select(Position,Base,Status)
+```
+
+```{r}
+
+# 1 hot encode
+dummy <- dummyVars(" ~ .", data=chr_1_Key)
+chr_2_Hot_2 <- data.frame(predict(dummy, newdata = chr_1_Key)) %>%
+  dplyr::select(Position,Status,A=BaseA,C=BaseC,G=BaseG,T=BaseT,N=BaseN)
+save(chr_2_Hot_2, file = "Arabidopsis/chr2Hot_2.RData")
+```
