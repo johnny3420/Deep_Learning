@@ -1,0 +1,189 @@
+---
+title: "Drunk_Modeling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+library(tensorflow)
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+# Format phone data
+```{r}
+accelerations <- read_csv("Boozin/data/all_accelerometer_data_pids_13.csv")
+accelerations$time <- lubridate::as_datetime(accelerations$time/1000)
+accelerations$time <- lubridate::round_date(accelerations$time, "15 minutes")
+accelerations <- accelerations[-c(1,2),]
+```
+
+# Format TAC data
+```{r}
+pids <- unique(accelerations$pid)
+tacs <- data.frame(pid = NULL, timestamp = NULL, TAC_Reading = NULL)
+for(i in pids){
+  dat <- read_csv(paste0("Boozin/data/clean_tac/",i,"_clean_TAC.csv")) %>%
+    mutate(pid = i) %>%
+    select(pid, time = timestamp, TAC_Reading)
+  tacs <- rbind(tacs,dat)
+}
+tacs <- tacs %>%
+  mutate(Drunk = ifelse(TAC_Reading >= 0.08, 1, 0),
+         time = lubridate::as_datetime(time),
+         time = lubridate::round_date(time, "15 minutes"))
+```
+
+# Merge the two data frames
+
+```{r}
+dat <- inner_join(accelerations,
+                  tacs %>% select(-TAC_Reading),
+                  by = c("pid" = "pid", "time" = "time")) %>%
+  arrange(time) %>%
+  select(-time)
+```
+
+# Save data
+
+```{r}
+save(dat, file = "Booze_Data.R")
+```
+
+
+# Build generator
+
+```{r}
+# Generator, flank each side, no accordion. -flank -> focal -> +flank
+
+generator <- function(dat,
+                      # Input data
+                      flanking,
+                      # How many time points on each side to capture
+                      delay = 0,
+                      # Time point we want to predict on
+                      min_index = 1,
+                      # Earliest time point to use
+                      max_index = NULL,
+                      # Latest time point to use
+                      shuffle = FALSE,
+                      # If order of sampling
+                      batch_size = 32,
+                      # Samples per a batch
+                      step = 1) {
+  # How often we want to sample to sample data, 1 for every accelerator reading
+  samples <- array(0, dim = c(batch_size,
+                              2 * flanking / step + 1,
+                              (dim(dat)[[-1]] - 1))) # don't include Drunk status in samples, do include data from forward and backwards
+  targets <- array(0, dim = batch_size)
+  pids <-
+    sample(unlist(unique(dat[, 1]), use.names = F),
+           size = batch_size,
+           replace = T)
+  for (j in 1:batch_size) {
+    function(){
+    data2 <- dat %>%
+      filter(pid == pids[j])
+    if (is.null(max_index)){
+      max_index <- nrow(data2) - delay - flanking - 1
+      }
+    row <- sample(c((min_index + flanking):(max_index - flanking)), size = 1)
+    samples[j, ,] <- data.frame(data2)[(row - flanking):(row + flanking),-5]
+    targets[[j]] <- data2[[row + delay, 5]]
+    }
+  }
+  list(samples, targets)
+}
+```
+
+```{r}
+flanking <- 300
+step <- 1
+delay <- 0
+batch_size <- 1024
+train_gen <- generator(
+  dat,
+  flanking = flanking,
+  delay = delay,
+  min_index = 1,
+  max_index = NULL,
+  shuffle = TRUE,
+  step = step,
+  batch_size = batch_size
+)
+val_gen = generator(
+  dat,
+  flanking = flanking,
+  delay = delay,
+  min_index = 1,
+  max_index = NULL,
+  step = step,
+  batch_size = batch_size
+)
+test_gen <- generator(
+  dat,
+  flanking = flanking,
+  delay = delay,
+  min_index = 1,
+  max_index = NULL,
+  step = step,
+  batch_size = batch_size
+)
+val_steps <- 1000             
+test_steps <- 1000
+```
+
+# Test
+
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_conv_1d(
+    filters = 32,
+    kernel_size = 5,
+    activation = "relu",
+    input_shape = list(NULL, dim(data)[[-1]] - 1)
+  ) %>%
+  layer_max_pooling_1d(pool_size = 3) %>%
+  layer_conv_1d(filters = 32,
+                kernel_size = 5,
+                activation = "relu") %>%
+  bidirectional(
+    layer_gru(
+      units = 32,
+      return_sequences = TRUE,
+      recurrent_activation = "sigmoid",
+      use_bias = TRUE,
+      reset_after = TRUE
+    )
+  ) %>%
+  bidirectional(
+    layer_gru(
+      units = 64,
+      recurrent_activation = "sigmoid",
+      use_bias = TRUE,
+      reset_after = TRUE
+    )
+  ) %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "binary_crossentropy",
+  metrics = c("accuracy")
+)
+
+history <- model %>% fit(
+  train_gen,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+```
