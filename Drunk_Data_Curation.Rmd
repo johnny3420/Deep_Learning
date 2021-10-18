@@ -1,0 +1,53 @@
+---
+title: "Drunk_Data_Curation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+# Format phone data
+```{r}
+accelerations <- read_csv("Boozin/data/all_accelerometer_data_pids_13.csv")
+accelerations$time2 <- lubridate::as_datetime(accelerations$time/1000)
+accelerations$time3 <- as.integer(lubridate::round_date(accelerations$time2, "5 minutes"))
+accelerations <- accelerations[-c(1,2),]
+```
+
+# Format TAC data
+```{r}
+pids <- unique(accelerations$pid)
+tacs <- data.frame(pid = NULL, timestamp = NULL, TAC_Reading = NULL)
+for(i in pids){
+  dat <- read_csv(paste0("Boozin/data/clean_tac/",i,"_clean_TAC.csv")) %>%
+    mutate(pid = i) %>%
+    select(pid, time = timestamp, TAC_Reading)
+  tacs <- rbind(tacs,dat)
+}
+tacs <- tacs %>%
+  mutate(Drunk = ifelse(TAC_Reading >= 0.08, 1, 0),
+         time = lubridate::as_datetime(time),
+         time = as.integer(lubridate::round_date(time, "5 minutes")))
+```
+
+
+# Merge the two data frames
+
+```{r}
+data <- inner_join(accelerations,
+                  tacs %>% select(-TAC_Reading),
+                  by = c("pid" = "pid", "time3" = "time")) %>%
+  arrange(pid,time)
+```
+
+# Save data
+
+```{r}
+save(data, file = "Booze_Data.R")
+```
