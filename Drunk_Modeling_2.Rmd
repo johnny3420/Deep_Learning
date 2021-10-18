@@ -66,13 +66,23 @@ generator <- function(data, # Input data
 ```
 
 # Make generators
+
+# Split Data
+
+```{r}
+train_data <- data %>% filter(pid %in% c("BK7610", "BU4707", "CC6740", "DC6359", "DK3500", "HV0618", "JB3156", "JR8022"))
+val_data <- data %>% filter(pid %in% c("MC7070", "MJ8002", "PC6771"))
+test_data <- data %>% filter(pid %in% c("SA0297", "SF3079"))
+```
+
+
 ```{r}
 flanking <- 300
 step <- 1
 delay <- 0
 batch_size <- 64
 train_gen <- generator(
-  data,
+  train_data,
   flanking = flanking,
   delay = delay,
   min_index = 1,
@@ -82,7 +92,7 @@ train_gen <- generator(
   batch_size = batch_size
 )
 val_gen = generator(
-  data,
+  val_data,
   flanking = flanking,
   delay = delay,
   min_index = 1,
@@ -91,7 +101,7 @@ val_gen = generator(
   batch_size = batch_size
 )
 test_gen <- generator(
-  data,
+  test_data,
   flanking = flanking,
   delay = delay,
   min_index = 1,
