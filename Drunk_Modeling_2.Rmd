@@ -254,5 +254,5 @@ plot(history)
 ```
 
 ```{r}
-model %>% evaluate(test_gen,  steps = test_steps)
+model %>% evaluate(test_gen,  steps = test_steps) #97.88%
 ```
