@@ -60,12 +60,12 @@ answer_vocabulary_size <- 500
 text_input <- layer_input(shape = list(NULL),                              
                           dtype = "int32", name = "text")
 encoded_text <- text_input %>%
-  layer_embedding(input_dim = 64, output_dim = text_vocabulary_size) %>%   
+  layer_embedding(input_dim = text_vocabulary_size + 1, output_dim = 64) %>%   
   layer_lstm(units = 32)                                                   
 question_input <- layer_input(shape = list(NULL),                          
                               dtype = "int32", name = "question")
 encoded_question <- question_input %>%
-  layer_embedding(input_dim = 32, output_dim = ques_vocabulary_size) %>%
+  layer_embedding(input_dim = ques_vocabulary_size + 1, output_dim = 32) %>%
   layer_lstm(units = 16)
 concatenated <- layer_concatenate(list(encoded_text, encoded_question))    
 answer <- concatenated %>%                                                 
