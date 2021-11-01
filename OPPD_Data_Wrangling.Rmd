@@ -1,0 +1,103 @@
+---
+title: "OPPD_Data_Wrangling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(jsonlite)
+```
+
+```{r}
+master_df <- data.frame()
+annotations <- paste0("OPPD/DATA/", dir("OPPD/DATA/"), "/annotations.json")
+for(i in annotations){
+  tmp_df <- read_json(i)
+  tmp_df <- do.call(rbind.data.frame, tmp_df)
+  master_df <- rbind(master_df,tmp_df)
+}
+master_df <- master_df %>%
+  mutate(filepath = file.path(getwd(), paste0("OPPD/DATA/", eppo, "/", filename)))
+```
+
+```{r}
+#G1: a potting mixture consisting of a sandy loam soil, sand and peat (2:1:1w/w) including all necessary micro- and macro-nutrients, optimum soil moisture
+#G2: a sandy loam soil with optimum fertilizer supply and sub-optimum watering
+#G3: a sandy soil with low nutrient content and optimum soil moisture.
+#G1 = ideal, G2 = drought, G3 = natural
+table(master_df$eppo, master_df$growth_condition)
+```
+
+```{r}
+#Split Data
+train_df <- master_df %>%
+  group_by(eppo, growth_condition) %>%
+  sample_frac(.8) %>%
+  ungroup() 
+
+validation_df <- anti_join(master_df, train_df) %>%
+  group_by(eppo, growth_condition) %>%
+  sample_frac(.5) %>%
+  ungroup()
+
+test_df <- anti_join(master_df, train_df) %>% anti_join(., validation_df)
+
+train_df <- train_df %>%
+  mutate(new_filepath = file.path(paste(getwd(), "OPPD/Model_Data/train", eppo, growth_condition, filename, sep = "/")))
+validation_df <- validation_df %>% 
+  mutate(new_filepath = file.path(paste(getwd(), "OPPD/Model_Data/validation", eppo, growth_condition, filename, sep = "/")))
+test_df <- test_df %>%
+  mutate(new_filepath = file.path(paste(getwd(), "OPPD/Model_Data/test", eppo, growth_condition, filename, sep = "/")))
+```
+
+```{r}
+table(train_df$eppo, train_df$growth_condition)
+table(validation_df$eppo, validation_df$growth_condition)
+table(test_df$eppo, test_df$growth_condition)
+```
+
+```{r, eval=FALSE}
+save(train_df,validation_df,test_df, file = "OPPD_Data.R")
+```
+
+# Need to build file directory structure for the data
+
+```{r, eval=FALSE}
+species <- unique(master_df$eppo)
+treatments <- unique(master_df$growth_condition)
+original_dataset_dir <- paste(getwd(), "OPPD", "DATA", sep = "/")
+base_dir <- paste(getwd(), "OPPD", "Model_Data", sep = "/")
+dir.create(base_dir)
+for(i in c("train", "validation", "test")){
+  set_dir <- file.path(base_dir, i)
+  dir.create(set_dir)
+  for(j in species){
+    species_dir <- file.path(set_dir, j)
+    dir.create(species_dir)
+    for(k in treatments){
+      treatment_dir <- file.path(species_dir, k)
+      dir.create(treatment_dir)
+    }
+  }
+}
+
+```
+
+# Copy the images to their correct directory
+```{r, eval=FALSE}
+train_locations <- train_df$filepath
+new_train_locations <- train_df$new_filepath
+file.copy(train_locations, new_train_locations)
+
+validation_locations <- validation_df$filepath
+new_validation_locations <- validation_df$new_filepath
+file.copy(validation_locations, new_validation_locations)
+
+test_locations <- test_df$filepath
+new_test_locations <- test_df$new_filepath
+file.copy(test_locations, new_test_locations)
+```

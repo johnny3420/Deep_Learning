@@ -1,0 +1,115 @@
+---
+title: "OPPD_Modeling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+library(tensorflow)
+```
+```{r}
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+```{r}
+load("OPPD_Data.R")
+```
+
+```{r}
+train_dir <- file.path(getwd(), "OPPD/Model_Data/train")
+validation_dir <- file.path(getwd(), "OPPD/Model_Data/validation")
+test_dir <- file.path(getwd(), "OPPD/Model_Data/test")
+
+# Generators
+train_datagen <- image_data_generator(rescale = 1/255)             
+validation_datagen <- image_data_generator(rescale = 1/255)
+test_datagen <- image_data_generator(rescale = 1/255)
+
+train_generator <- flow_images_from_directory(
+  train_dir,                                                       
+  train_datagen,                                                   
+  target_size = c(150, 150),                                       
+  batch_size = 20,                                                 
+  class_mode = "categorical"
+)
+
+validation_generator <- flow_images_from_directory(
+  validation_dir,
+  validation_datagen,
+  target_size = c(150, 150),
+  batch_size = 20,
+  class_mode = "categorical"
+)
+
+test_generator <- flow_images_from_directory(
+  test_dir,
+  test_datagen,
+  target_size = c(150, 150),
+  batch_size = 20,
+  class_mode = "categorical"
+)
+```
+
+
+```{r}
+# Base model attempt
+model <- keras_model_sequential() %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu",
+                input_shape = c(150, 150, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dense(units = 1, activation = "softmax")
+
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+```
+
+```{r, error=TRUE}
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+model %>% evaluate(test_generator, steps = 200)
+```
+
+### Maybe need to make two different directory structures
+### One which has each species separated and other with each treatment separated
+### Feed in 2 different generators as input and have 2 different outputs
