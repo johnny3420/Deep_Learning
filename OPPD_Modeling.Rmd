@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(lubridate)
 library(keras)
+use_condaenv('r-reticulate')
 library(tensorflow)
 ```
 ```{r}
@@ -20,8 +21,139 @@ tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable 
 
 ```{r}
 load("OPPD_Data.R")
+train_df <- train_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
+validation_df <- validation_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
+test_df <- test_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
 ```
 
+# NEW GENERATORS
+
+```{r}
+
+# Generators
+train_datagen <- image_data_generator(rescale = 1/255)             
+validation_datagen <- image_data_generator(rescale = 1/255)
+test_datagen <- image_data_generator(rescale = 1/255)
+
+train_generator <- flow_images_from_dataframe(
+  dataframe = train_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = train_datagen,
+  target_size = c(150, 150),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+validation_generator <- flow_images_from_dataframe(
+  dataframe = validation_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = validation_datagen,
+  target_size = c(150, 150),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+test_generator <- flow_images_from_dataframe(
+  dataframe = test_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = test_datagen,
+  target_size = c(150, 150),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = FALSE,
+  interpolation = "nearest"
+)
+```
+
+
+```{r}
+# Base model attempt
+plants_input <- layer_input(shape = list(150,150,3), name = "plants")
+base_model <- plants_input %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu")
+species_prediction <- base_model %>%
+  layer_dense(units = 1, activation = "softmax", name = "eppo")
+condition_prediction <- base_model %>%
+  layer_dense(units = 1, activation = "softmax", name = "growth_condition")
+
+model <- keras_model(
+  plants_input,
+  list(species_prediction, condition_prediction)
+)
+
+model %>% compile(
+  loss = c("categorical_crossentropy", "categorical_crossentropy"),
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+```
+
+```{r}
+summary(model)
+```
+
+
+```{r, error=TRUE}
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+model %>% evaluate(test_generator, steps = 200)
+```
+
+### Maybe need to make two different directory structures
+### One which has each species separated and other with each treatment separated
+### Feed in 2 different generators as input and have 2 different outputs
+
+### Flow image from directory
+
+
+
+
+# OLD GENERATORS
 ```{r}
 train_dir <- file.path(getwd(), "OPPD/Model_Data/train")
 validation_dir <- file.path(getwd(), "OPPD/Model_Data/validation")
@@ -56,60 +188,3 @@ test_generator <- flow_images_from_directory(
   class_mode = "categorical"
 )
 ```
-
-
-```{r}
-# Base model attempt
-model <- keras_model_sequential() %>%
-  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu",
-                input_shape = c(150, 150, 3)) %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_flatten() %>%
-  layer_dense(units = 512, activation = "relu") %>%
-  layer_dense(units = 1, activation = "softmax")
-
-model %>% compile(
-  loss = "categorical_crossentropy",
-  optimizer = "rmsprop",
-  metrics = c("acc")
-)
-
-```
-
-```{r, error=TRUE}
-history <- model %>% fit(
-  train_generator,
-  steps_per_epoch = 500,
-  epochs = 20,
-  validation_data = validation_generator,
-  validation_steps = 100
-)
-```
-
-```{r}
-history <- model %>% fit(
-  train_generator,
-  steps_per_epoch = 500,
-  epochs = 20,
-  validation_data = validation_generator,
-  validation_steps = 100
-)
-```
-
-```{r}
-plot(history)
-```
-
-```{r}
-model %>% evaluate(test_generator, steps = 200)
-```
-
-### Maybe need to make two different directory structures
-### One which has each species separated and other with each treatment separated
-### Feed in 2 different generators as input and have 2 different outputs
