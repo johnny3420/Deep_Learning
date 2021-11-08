@@ -13,8 +13,6 @@ library(lubridate)
 library(keras)
 use_condaenv('r-reticulate')
 library(tensorflow)
-```
-```{r}
 physical_devices <- tf$config$list_physical_devices('GPU')
 tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
 ```
@@ -81,9 +79,9 @@ test_generator <- flow_images_from_dataframe(
 
 ```{r}
 # Base model attempt
-plants_input <- layer_input(shape = list(150,150,3), name = "plants")
+plants_input <- layer_input(shape = list(150,150,3), dtype = "float32", name = "plant")
 base_model <- plants_input %>%
-  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_conv_2d(input_shape = c(150,150,3), filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
   layer_max_pooling_2d(pool_size = c(2, 2)) %>%
   layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
   layer_max_pooling_2d(pool_size = c(2, 2)) %>%
@@ -94,13 +92,13 @@ base_model <- plants_input %>%
   layer_flatten() %>%
   layer_dense(units = 512, activation = "relu")
 species_prediction <- base_model %>%
-  layer_dense(units = 1, activation = "softmax", name = "eppo")
+  layer_dense(units = 1, activation = "softmax")
 condition_prediction <- base_model %>%
-  layer_dense(units = 1, activation = "softmax", name = "growth_condition")
+  layer_dense(units = 1, activation = "softmax")
 
 model <- keras_model(
-  plants_input,
-  list(species_prediction, condition_prediction)
+  inputs = plants_input,
+  outputs = c(species_prediction, condition_prediction)
 )
 
 model %>% compile(
