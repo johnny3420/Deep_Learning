@@ -13,15 +13,31 @@ library(lubridate)
 library(keras)
 use_condaenv('r-reticulate')
 library(tensorflow)
+
+```
+```{r}
 physical_devices <- tf$config$list_physical_devices('GPU')
 tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
 ```
 
 ```{r}
 load("OPPD_Data.R")
-train_df <- train_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
-validation_df <- validation_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
-test_df <- test_df %>% select(eppo, growth_condition, filepath) %>% mutate(filepath = str_remove(filepath,(".*/")))
+train_df <- train_df %>%
+  select(eppo, growth_condition, filepath) %>%
+  mutate(filepath = str_remove(filepath,(".*/")),
+         eppo = as.integer(as.factor(eppo)) - 1,
+         growth_condition = as.integer(as.factor(growth_condition)) - 1)
+                                                                             
+validation_df <- validation_df %>%
+  select(eppo, growth_condition, filepath) %>%
+  mutate(filepath = str_remove(filepath,(".*/")),
+         eppo = as.integer(as.factor(eppo)) - 1,
+         growth_condition = as.integer(as.factor(growth_condition)) - 1)
+test_df <- test_df %>%
+  select(eppo, growth_condition, filepath) %>%
+  mutate(filepath = str_remove(filepath,(".*/")),
+         eppo = as.integer(as.factor(eppo)) - 1,
+         growth_condition = as.integer(as.factor(growth_condition)) - 1)
 ```
 
 # NEW GENERATORS
@@ -76,45 +92,30 @@ test_generator <- flow_images_from_dataframe(
 )
 ```
 
+### Base model 1
 
 ```{r}
-# Base model attempt
 plants_input <- layer_input(shape = list(150,150,3), dtype = "float32", name = "plant")
 base_model <- plants_input %>%
   layer_conv_2d(input_shape = c(150,150,3), filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
   layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
-  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
-  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
   layer_flatten() %>%
   layer_dense(units = 512, activation = "relu")
 species_prediction <- base_model %>%
-  layer_dense(units = 1, activation = "softmax")
-condition_prediction <- base_model %>%
-  layer_dense(units = 1, activation = "softmax")
-
+  layer_dense(units = 10, activation = "softmax", name = "species")
+ condition_prediction <- base_model %>%
+   layer_dense(units = 3, activation = "softmax", name = "growth")
 model <- keras_model(
   inputs = plants_input,
   outputs = c(species_prediction, condition_prediction)
 )
 
 model %>% compile(
-  loss = c("categorical_crossentropy", "categorical_crossentropy"),
+  loss = c("sparse_categorical_crossentropy", "sparse_categorical_crossentropy"),
   optimizer = "rmsprop",
   metrics = c("acc")
 )
 
-```
-
-```{r}
-summary(model)
-```
-
-
-```{r, error=TRUE}
 history <- model %>% fit(
   train_generator,
   steps_per_epoch = 500,
@@ -123,8 +124,93 @@ history <- model %>% fit(
   validation_steps = 100
 )
 ```
+```{r}
+plot(history)
+```
 
 ```{r}
+model %>% evaluate(test_generator, steps = 200)
+```
+
+
+### Larger images
+
+```{r}
+
+# Generators
+train_datagen <- image_data_generator(rescale = 1/255)             
+validation_datagen <- image_data_generator(rescale = 1/255)
+test_datagen <- image_data_generator(rescale = 1/255)
+
+train_generator <- flow_images_from_dataframe(
+  dataframe = train_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = train_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+validation_generator <- flow_images_from_dataframe(
+  dataframe = validation_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = validation_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+test_generator <- flow_images_from_dataframe(
+  dataframe = test_df,
+  directory = file.path(getwd(),"OPPD","Model_Data"),
+  x_col = "filepath",
+  y_col = list("eppo","growth_condition"),
+  generator = test_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = FALSE,
+  interpolation = "nearest"
+)
+```
+
+# Base model 2
+
+```{r}
+plants_input <- layer_input(shape = list(256,256,3), dtype = "float32", name = "plant")
+base_model <- plants_input %>%
+  layer_conv_2d(input_shape = c(256,256,3), filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu")
+species_prediction <- base_model %>%
+  layer_dense(units = 10, activation = "softmax", name = "species")
+ condition_prediction <- base_model %>%
+   layer_dense(units = 3, activation = "softmax", name = "growth")
+model <- keras_model(
+  inputs = plants_input,
+  outputs = c(species_prediction, condition_prediction)
+)
+
+model %>% compile(
+  loss = c("sparse_categorical_crossentropy", "sparse_categorical_crossentropy"),
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
 history <- model %>% fit(
   train_generator,
   steps_per_epoch = 500,
@@ -139,7 +225,106 @@ plot(history)
 ```
 
 ```{r}
-model %>% evaluate(test_generator, steps = 200)
+model %>% evaluate(test_generator, steps = 150)
+```
+
+### Base model 3
+
+```{r}
+plants_input <- layer_input(shape = list(256,256,3), dtype = "float32", name = "plant")
+base_model <- plants_input %>%
+  layer_conv_2d(input_shape = c(256,256,3), filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dense(units = 256, activation = "relu") %>%
+  layer_dense(units = 64, activation = "relu")
+species_prediction <- base_model %>%
+  layer_dense(units = 10, activation = "softmax", name = "species")
+condition_prediction <- base_model %>%
+  layer_dense(units = 3, activation = "softmax", name = "growth")
+model <- keras_model(
+  inputs = plants_input,
+  outputs = c(species_prediction, condition_prediction)
+)
+
+model %>% compile(
+  loss = c("sparse_categorical_crossentropy", "sparse_categorical_crossentropy"),
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+model %>% evaluate(test_generator, steps = 150)
+```
+
+### Base model 4
+
+```{r}
+plants_input <- layer_input(shape = list(256,256,3), dtype = "float32", name = "plant")
+base_model <- plants_input %>%
+  layer_conv_2d(input_shape = c(256,256,3), filters = 64, kernel_size = c(5, 5), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(4, 4)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 256, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 256, activation = "relu") %>%
+  layer_dense(units = 256, activation = "relu") %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu")
+species_prediction <- base_model %>%
+  layer_dense(units = 10, activation = "softmax", name = "species")
+condition_prediction <- base_model %>%
+  layer_dense(units = 3, activation = "softmax", name = "growth")
+model <- keras_model(
+  inputs = plants_input,
+  outputs = c(species_prediction, condition_prediction)
+)
+
+model %>% compile(
+  loss = c("sparse_categorical_crossentropy", "sparse_categorical_crossentropy"),
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+model %>% evaluate(test_generator, steps = 150)
 ```
 
 ### Maybe need to make two different directory structures
@@ -148,11 +333,8 @@ model %>% evaluate(test_generator, steps = 200)
 
 ### Flow image from directory
 
-
-
-
 # OLD GENERATORS
-```{r}
+```{r, eval = F}
 train_dir <- file.path(getwd(), "OPPD/Model_Data/train")
 validation_dir <- file.path(getwd(), "OPPD/Model_Data/validation")
 test_dir <- file.path(getwd(), "OPPD/Model_Data/test")
