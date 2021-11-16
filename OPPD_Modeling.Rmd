@@ -327,6 +327,63 @@ plot(history)
 model %>% evaluate(test_generator, steps = 150)
 ```
 
+#### BOOK EXAMPLE 7.3 with my data
+
+```{r}
+plants_input <- layer_input(shape = list(256,256,3), dtype = "float32", name = "plant")
+base_model <- plants_input %>%
+  layer_separable_conv_2d(filters = 32, kernel_size = 3,
+                          activation = "relu",
+                          input_shape = c(256,256,3)) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_global_average_pooling_2d() %>%
+  layer_dense(units = 32, activation = "relu")
+species_prediction <- base_model %>%
+  layer_dense(units = 10, activation = "softmax", name = "species")
+condition_prediction <- base_model %>%
+  layer_dense(units = 3, activation = "softmax", name = "growth")
+
+model <- keras_model(
+  inputs = plants_input,
+  outputs = c(species_prediction, condition_prediction)
+)
+
+model %>% compile(
+  loss = c("sparse_categorical_crossentropy", "sparse_categorical_crossentropy"),
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 20,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+model %>% evaluate(test_generator, steps = 150)
+```
+
+
 ### Maybe need to make two different directory structures
 ### One which has each species separated and other with each treatment separated
 ### Feed in 2 different generators as input and have 2 different outputs
