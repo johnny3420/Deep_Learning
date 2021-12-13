@@ -1,0 +1,5 @@
+{
+  "kernel": 5,
+  "filters": 32,
+  "dropout": 0.5
+}

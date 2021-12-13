@@ -1,0 +1,36 @@
+Model
+Model: "sequential"
+________________________________________________________________________________
+ Layer (type)                       Output Shape                    Param #     
+================================================================================
+ conv2d_3 (Conv2D)                  (None, 146, 146, 8)             608         
+                                                                                
+ max_pooling2d_3 (MaxPooling2D)     (None, 73, 73, 8)               0           
+                                                                                
+ conv2d_2 (Conv2D)                  (None, 69, 69, 16)              3216        
+                                                                                
+ max_pooling2d_2 (MaxPooling2D)     (None, 34, 34, 16)              0           
+                                                                                
+ conv2d_1 (Conv2D)                  (None, 30, 30, 32)              12832       
+                                                                                
+ max_pooling2d_1 (MaxPooling2D)     (None, 15, 15, 32)              0           
+                                                                                
+ conv2d (Conv2D)                    (None, 11, 11, 32)              25632       
+                                                                                
+ max_pooling2d (MaxPooling2D)       (None, 5, 5, 32)                0           
+                                                                                
+ flatten (Flatten)                  (None, 800)                     0           
+                                                                                
+ dropout (Dropout)                  (None, 800)                     0           
+                                                                                
+ dense_1 (Dense)                    (None, 512)                     410112      
+                                                                                
+ dense (Dense)                      (None, 1)                       513         
+                                                                                
+================================================================================
+Total params: 452,913
+Trainable params: 452,913
+Non-trainable params: 0
+________________________________________________________________________________
+
+

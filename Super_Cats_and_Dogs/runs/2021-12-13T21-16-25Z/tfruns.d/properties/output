@@ -1,0 +1,84 @@
+
+> # Load Libraries
+> library(tidyverse)
+
+> library(lubridate)
+
+> library(keras)
+
+> use_condaenv('r-reticulate')
+
+> library(tensorflow)
+
+> # Start GPU
+> physical_devices <- tf$config$list_physical_devices('GPU')
+
+> tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+
+> # Data
+> base_dir <- "D:/R_Stuff/Deep_Learning/cats_and_dogs_small"
+
+> train_dir <- file.path(base_dir, "train")
+
+> validation_dir <- file.path(base_dir, "validation")
+
+> test_dir <- file.path(base_dir, "test")
+
+> # Flags
+> 
+> FLAGS <- flags(
++   flag_integer("kernel", 3, "kernel size"),
++   flag_integer("filters", 32, "number of filters in first layer"),
++    .... [TRUNCATED] 
+
+> # Book Model
+> model <- keras_model_sequential() %>%
++   layer_conv_2d(filters = FLAGS$filters, kernel_size = c(FLAGS$kernel, FLAGS$kernel), activat .... [TRUNCATED] 
+
+> model %>% compile(
++   loss = "binary_crossentropy",
++   optimizer = optimizer_rmsprop(lr = 1e-4),
++   metrics = c("acc")
++ )
+
+> # Generators
+> datagen <- image_data_generator(
++   rescale = 1/255,
++   rotation_range = 40,
++   width_shift_range = 0.2,
++   height_shift_range =  .... [TRUNCATED] 
+
+> test_datagen <- image_data_generator(rescale = 1/255)
+
+> train_generator <- flow_images_from_directory(train_dir,
++                                               datagen,
++                                  .... [TRUNCATED] 
+
+> validation_generator <- flow_images_from_directory(
++   validation_dir,
++   test_datagen,
++   target_size = c(150, 150),
++   batch_size = 16,
++   cl .... [TRUNCATED] 
+
+> test_generator <- flow_images_from_directory(
++   test_dir,
++   test_datagen,
++   target_size = c(150, 150),
++   batch_size = 16,
++   class_mode = " ..." ... [TRUNCATED] 
+
+> # Run model
+> history <- model %>% fit(
++   train_generator,
++   steps_per_epoch = 100,
++   epochs = 50,
++   validation_data = validation_generator, .... [TRUNCATED] 
+
+> plot(history)
+
+> # Scores
+> score <- model %>% evaluate(test_generator, steps = 50)
+
+> #cat('Test loss:', score$loss, '\n')
+> #cat('Test accuracy:', score$acc, '\n')

@@ -1,0 +1,39 @@
+---
+title: "Super_Cats_and_Dogs"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+use_condaenv('r-reticulate')
+library(tensorflow)
+library(tfruns)
+#library(tfestimators)
+```
+
+```{r}
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+
+```{r}
+# Hyperparameter flags
+FLAGS <- expand.grid(
+  dropout=c(0.25, 0.5),
+  filters=c(4, 8, 16, 32),
+  kernel=c(3,5,7)
+)
+```
+
+
+```{r}
+tuning_run(file="Cats_and_Dogs_Model.R", flags=FLAGS)
+```
+
