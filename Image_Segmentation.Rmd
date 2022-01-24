@@ -120,17 +120,14 @@ plot(history)
 
 ```{r}
 model <- load_model_hdf5("oxford_segmentation.keras")
-i <- 4
+i <- 8
 img_path <- input_img_paths[i]
-img <- image_to_array(
+img_arr <- array(0, c(1, 200, 200, 3))
+img_arr[1,,,] <- image_to_array(
       image_load(img_path, target_size=img_size)
       ) / 255
-img2 <- image_load(img_path, target_size = c(200, 200)) %>%           
-  image_to_array() %>%                                               
-  array_reshape(dim = c(1, 200, 200, 3)) %>%                         
-  imagenet_preprocess_input()
-preds <- model %>% predict(img2)
+preds <- model %>% predict(img_arr)
 par(mfrow = c(1, 2))
-plot(as.raster(img))
+plot(as.raster(img_arr[1,,,]))
 plot(as.raster(preds[1,,,]))
 ```
