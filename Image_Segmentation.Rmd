@@ -1,0 +1,136 @@
+---
+title: "Image_Segmentation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+use_condaenv('r-reticulate')
+library(tensorflow)
+```
+
+```{r}
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+```{r}
+input_img_paths <- list.files(path = "Image_Segmentation_Images/images/", pattern = "\\.jpg", full.names = T)
+target_paths <- list.files(path = "Image_Segmentation_Images/annotations/trimaps/", pattern = "\\.png", full.names = T) 
+```
+
+```{r}
+img_size <- c(200, 200)                                                  
+num_imgs <- length(input_img_paths)                                        
+ 
+set.seed(1337)
+input_img_paths <- sample(sort(input_img_paths), size = num_imgs)
+set.seed(1337)
+target_paths <- sample((target_paths), size = num_imgs)
+
+path_to_input_image <- function(path,img_size){
+    image_to_array(
+      image_load(path, target_size=img_size)
+      ) / 255
+}
+
+path_to_target <- function(path, img_size){
+    image_to_array(
+      image_load(path, target_size=img_size, grayscale = T)
+      ) - 1
+}
+
+input_imgs <- array(0, c(num_imgs, img_size, 3))
+targets <- array(0, c(num_imgs, img_size, 1))
+
+for(i in 1:num_imgs){
+  input_imgs[i,,,] <- path_to_input_image(input_img_paths[i], img_size)
+  targets[i,,,] <- path_to_target(target_paths[i], img_size)  
+}
+```
+
+```{r}
+num_val_samples <- 1000
+train_input_imgs <- input_imgs[1:(num_imgs-num_val_samples),,,]                         
+train_targets <- targets[1:(num_imgs-num_val_samples),,,]
+val_input_imgs <- input_imgs[(num_imgs-num_val_samples+1):num_imgs,,,]                       
+val_targets <- targets[(num_imgs-num_val_samples+1):num_imgs,,,]                             
+```
+
+```{r}
+model <- keras_model_sequential(input_shape = c(img_size,3)) %>%
+  layer_conv_2d(filters = 64, kernel_size = 3, strides = 2, activation = "relu", padding="same") %>%
+  layer_conv_2d(filters = 64, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3, strides = 2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 256, kernel_size = 3, strides = 2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 256, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 256, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 256, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 128, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 128, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 64, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 64, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 3, kernel_size = 3, activation="softmax", padding="same")
+```
+
+```{r}
+summary(model)
+```
+
+```{r}
+model %>% compile(
+  loss = "sparse_categorical_crossentropy",
+  optimizer = "rmsprop")
+```
+
+```{r}
+callbacks_list <- list(
+  callback_model_checkpoint(
+    filepath = "oxford_segmentation.keras",
+    monitor = "val_loss",
+    save_best_only = TRUE
+  )
+)
+```
+
+
+```{r}
+history <- model %>% fit(
+  train_input_imgs,
+  train_targets,
+  epochs = 50,
+  batch_size = 64,
+  callbacks = callbacks_list,
+  validation_data = list(val_input_imgs, val_targets)
+)
+```
+
+```{r}
+plot(history)
+```
+
+
+```{r}
+model <- load_model_hdf5("oxford_segmentation.keras")
+i <- 4
+img_path <- input_img_paths[i]
+img <- image_to_array(
+      image_load(img_path, target_size=img_size)
+      ) / 255
+img2 <- image_load(img_path, target_size = c(200, 200)) %>%           
+  image_to_array() %>%                                               
+  array_reshape(dim = c(1, 200, 200, 3)) %>%                         
+  imagenet_preprocess_input()
+preds <- model %>% predict(img2)
+par(mfrow = c(1, 2))
+plot(as.raster(img))
+plot(as.raster(preds[1,,,]))
+```
