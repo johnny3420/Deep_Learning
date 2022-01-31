@@ -1,0 +1,172 @@
+---
+title: "CUB_Models"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Initial Setup
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+use_condaenv('r-reticulate')
+library(tensorflow)
+```
+
+```{r}
+# initiate keras
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+# Data Wrangling
+
+```{r}
+# Read images
+df <- read_delim("CUB_200_2011/images.txt",
+                 col_names = c("Image_ID","File_Path"))
+# Fix paths
+df <- df %>% mutate(filepath = file.path(getwd(),"CUB_200_2011/images",File_Path),
+                    filename = basename(File_Path))
+# Add training split
+df <- df %>% left_join(read_delim("CUB_200_2011/train_test_split.txt",
+                                  col_names = c("Image_ID", "Training_Image")),
+                       by = "Image_ID")
+# Add class ID
+df <- df %>% left_join(read_delim("CUB_200_2011/image_class_labels.txt",
+                                  col_names = c("Image_ID", "Class_ID")),
+                       by = "Image_ID")
+# Add class label
+df <- df %>% left_join(read_delim("CUB_200_2011/classes.txt",
+                                  col_names = c("Class_ID", "Class_Label")),
+                       by = "Class_ID")
+# Subtract 1 from labels
+df <- df %>% mutate(Class_ID = as.integer(Class_ID) - 1)
+
+head(df)
+```
+
+# Split data and format for model
+```{r}
+train_df <- df %>% filter(Training_Image == T)
+other_df <- df %>% filter(Training_Image == F)
+val_idx <- sample(1:nrow(other_df), size = 5000)
+validation_df <- other_df[val_idx,]
+test_df <- other_df[-val_idx,]
+```
+
+# Generators
+```{r}
+# Generators
+train_datagen <- image_data_generator(rescale = 1/255)             
+validation_datagen <- image_data_generator(rescale = 1/255)
+test_datagen <- image_data_generator(rescale = 1/255)
+
+train_generator <- flow_images_from_dataframe(
+  dataframe = train_df,
+  x_col = "filepath",
+  y_col = list("Class_ID"),
+  generator = train_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+validation_generator <- flow_images_from_dataframe(
+  dataframe = validation_df,
+  x_col = "filepath",
+  y_col = list("Class_ID"),
+  generator = validation_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = TRUE,
+  interpolation = "nearest"
+)
+
+test_generator <- flow_images_from_dataframe(
+  dataframe = test_df,
+  x_col = "filepath",
+  y_col = list("Class_ID"),
+  generator = test_datagen,
+  target_size = c(256, 256),
+  color_mode = "rgb",
+  class_mode = "multi_output",
+  batch_size = 32,
+  shuffle = FALSE,
+  interpolation = "nearest"
+)
+```
+
+# Build Model
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_separable_conv_2d(dtype = "float32",filters = 32,
+                          kernel_size = 3,
+                          activation = "relu",
+                          input_shape = c(256,256,3)) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_global_average_pooling_2d() %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 200, activation = "softmax")
+```
+
+```{r}
+summary(model)
+```
+
+```{r}
+model %>% compile(
+  loss = "sparse_categorical_crossentropy",
+  optimizer = "rmsprop",
+  metrics = c("acc")
+)
+
+callbacks_list <- list(                        
+  callback_early_stopping(                     
+    monitor = "acc",                           
+    patience = 2                               
+  )
+)
+```
+
+
+```{r, eval = F}
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = 500,
+  epochs = 200,
+  callbacks = callbacks_list,
+  validation_data = validation_generator,
+  validation_steps = 100
+)
+
+```
+
+```{r, eval = F}
+plot(history)
+```
+
+```{r, eval = F}
+model %>% evaluate(test_generator, steps = 150)
+```
