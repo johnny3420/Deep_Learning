@@ -1,0 +1,159 @@
+---
+title: "Image_Segmentation_With_Generators"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(keras)
+use_condaenv('r-reticulate')
+library(tensorflow)
+```
+
+```{r}
+# initiate keras
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+```{r}
+# get file paths
+input_img_paths <- list.files(path = file.path(getwd(),"Image_Segmentation_Images/images/"), pattern = "\\.jpg", full.names = T)
+target_paths <- list.files(path = file.path(getwd(),"Image_Segmentation_Images/annotations/trimaps/"), pattern = "\\.png", full.names = T, include.dirs = T) 
+```
+
+```{r}
+#Make image data frame
+num_imgs <- length(input_img_paths)                                        
+ 
+set.seed(1337)
+input_img_paths <- sample(sort(input_img_paths), size = num_imgs)
+set.seed(1337)
+target_paths <- sample((target_paths), size = num_imgs)
+
+img_df <- data.frame(filename = basename(input_img_paths),
+                     input_img = input_img_paths,
+                     target_img = target_paths)
+```
+
+```{r}
+# build generator
+data_generator <- function(data = img_df,
+                      min_index = 1,
+                      max_index = NULL,
+                      batch_size = 64,
+                      img_size = c(200, 200)) {
+  if (is.null(max_index))
+    max_index <- nrow(data)
+  i <- min_index
+  function() {
+    if ((i + batch_size - 1) > nrow(data))
+      i <<- 1
+    rows <- sample(c(min_index:max_index), size = batch_size)
+    i <<- i + batch_size
+    inputs <- array(0, dim = c(length(rows), img_size, 3))
+    targets <- array(0, c(length(rows), img_size, 1))
+    for (j in 1:length(rows)) {
+      inputs[j, , , ] <- image_to_array(image_load(data[[rows[j], 2]], target_size =
+                                                      img_size)) / 255
+      targets[j, , , ] <- image_to_array(image_load(data[[rows[j], 3]], target_size =
+                                                      img_size, grayscale = T)) - 1
+    }
+    list(inputs, targets)
+  }
+}
+```
+
+
+```{r}
+# prep data
+img_size <- c(200, 200)  
+batch_size <- 64
+train_gen <- data_generator(
+  img_df,
+  min_index = 1,
+  max_index = 6390,
+  batch_size = batch_size,
+  img_size = img_size
+)
+val_gen <- data_generator(
+  img_df,
+  min_index = 6391,
+  max_index = NULL,
+  batch_size = batch_size,
+  img_size = img_size
+)
+```
+
+```{r}
+#build model
+model <- keras_model_sequential(input_shape = c(img_size,3)) %>%
+  layer_conv_2d(filters = 64, kernel_size = 3, strides = 2, activation = "relu", padding="same") %>%
+  layer_conv_2d(filters = 64, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3, strides = 2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 256, kernel_size = 3, strides = 2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 256, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 256, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 256, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 128, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 128, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 64, kernel_size = 3, activation="relu", padding="same") %>%
+  layer_conv_2d_transpose(filters = 64, kernel_size = 3, strides=2, activation="relu", padding="same") %>%
+  layer_conv_2d(filters = 3, kernel_size = 3, activation="softmax", padding="same")
+```
+
+```{r}
+summary(model)
+```
+
+
+```{r}
+model %>% compile(
+  loss = "sparse_categorical_crossentropy",
+  optimizer = "rmsprop")
+```
+
+```{r}
+callbacks_list <- list(
+  callback_model_checkpoint(
+    filepath = "generator.oxford_segmentation.keras",
+    monitor = "val_loss",
+    save_best_only = TRUE
+  )
+)
+```
+
+```{r, eval = F}
+history <- model %>% fit_generator(
+  generator = train_gen,
+  epochs = 20,
+  validation_data = val_gen,
+  callbacks = callbacks_list,
+  steps_per_epoch = 100
+)
+```
+
+```{r, eval = F}
+plot(history)
+```
+
+```{r}
+model <- load_model_hdf5("generator.oxford_segmentation.keras")
+i <- 1234
+img_path <- input_img_paths[i]
+img_arr <- array(0, c(1, 200, 200, 3))
+img_size <- c(200, 200)  
+img_arr[1,,,] <- image_to_array(
+      image_load(img_path, target_size=img_size)
+      ) / 255
+preds <- model %>% predict(img_arr)
+par(mfrow = c(1, 2))
+plot(as.raster(img_arr[1,,,]))
+plot(as.raster(preds[1,,,]))
+```
