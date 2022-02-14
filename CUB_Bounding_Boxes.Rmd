@@ -1,0 +1,698 @@
+---
+title: "CUB_Bounding_Boxes"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(rjson)
+library(jpeg)
+library(magick)
+library(purrr)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(keras)
+use_condaenv('r-reticulate')
+library(tensorflow)
+```
+
+```{r}
+physical_devices <- tf$config$list_physical_devices('GPU')
+tf$config$experimental$set_memory_growth(device = physical_devices[[1]], enable = T)
+```
+
+# Data Wrangling
+
+```{r}
+# # Read images
+# df <- read_delim("CUB_200_2011/images.txt",
+#                  col_names = c("Image_ID","File_Path"))
+# # Fix paths
+# df <- df %>% mutate(filepath = file.path(getwd(),"CUB_200_2011/images",File_Path),
+#                     filename = basename(File_Path))
+```
+
+```{r, eval = F}
+# # One time capture image original dimensions
+# # H x W
+# df$image_height <- NA
+# df$image_width <- NA
+# for(i in 1:nrow(df)){
+#   img <- readJPEG(df[[i,"filepath"]])
+#   df$image_height[i] <- dim(img)[1]
+#   df$image_width[i] <- dim(img)[2]
+# }
+# 
+# image_sizes <- df %>% select(Image_ID,image_height,image_width)
+# write_delim(image_sizes, file = "CUB_200_2011/image_sizes.txt", col_names = F)
+```
+
+```{r}
+# Add training split
+# df <- df %>% left_join(read_delim("CUB_200_2011/train_test_split.txt",
+#                                   col_names = c("Image_ID", "Training_Image")),
+#                        by = "Image_ID")
+# # Add class ID
+# df <- df %>% left_join(read_delim("CUB_200_2011/image_class_labels.txt",
+#                                   col_names = c("Image_ID", "Class_ID")),
+#                        by = "Image_ID")
+# # Add class label
+# df <- df %>% left_join(read_delim("CUB_200_2011/classes.txt",
+#                                   col_names = c("Class_ID", "Class_Label")),
+#                        by = "Class_ID")
+# # Subtract 1 from labels
+# df <- df %>% mutate(Class_ID = as.integer(Class_ID) - 1)
+# 
+# # Add bounding boxes
+# boxes <- read_delim("CUB_200_2011/bounding_boxes.txt",
+#                     col_names = c("Image_ID", "x_left","y_top","bbox_width","bbox_height"))
+# boxes <- boxes %>%
+#   mutate(y_bottom = y_top + bbox_height - 1, x_right = x_left + bbox_width - 1)
+# 
+# df <- df %>%
+#   inner_join(boxes, by = "Image_ID")
+# 
+# # Add image dimensions
+# 
+# df <- df %>% left_join(read_delim("CUB_200_2011/image_sizes.txt",
+#                                   col_names = c("Image_ID", "image_height", "image_width")),
+#                        by = "Image_ID")
+# 
+# # Easier name
+# df <- df %>%
+#   mutate(name = sub(".*\\.","",Class_Label))
+```
+
+```{r}
+# # Save df for quick access
+# write_delim(df, "CUB_200_2011/Complete_df.tsv")
+```
+
+# Load data frame
+```{r}
+df <- read_delim("CUB_200_2011/Complete_df.tsv")
+```
+
+
+```{r}
+target_height <- 224
+target_width <- 224
+
+df <- df %>% mutate(
+  x_left_scaled = (x_left / image_width * target_width) %>% round(),
+  x_right_scaled = (x_right / image_width * target_width) %>% round(),
+  y_top_scaled = (y_top / image_height * target_height) %>% round(),
+  y_bottom_scaled = (y_bottom / image_height * target_height) %>% round(),
+  bbox_width_scaled =  (bbox_width / image_width * target_width) %>% round(),
+  bbox_height_scaled = (bbox_height / image_height * target_height) %>% round()
+)
+```
+
+```{r}
+img_data <- df[4,]
+img <- image_read(img_data$filepath)
+img <- image_draw(img)
+rect(
+  img_data$x_left,
+  img_data$y_bottom,
+  img_data$x_right,
+  img_data$y_top,
+  border = "purple",
+  lwd = 2
+)
+text(
+  img_data$x_right,
+  img_data$y_top,
+  img_data$name,
+  offset = 1,
+  pos = 2,
+  cex = 1.5,
+  col = "purple"
+)
+dev.off()
+```
+
+# Single object categorization
+
+```{r}
+feature_extractor <-
+  application_xception(
+    include_top = FALSE,
+    input_shape = c(224, 224, 3),
+    pooling = "avg"
+)
+
+feature_extractor %>% freeze_weights()
+```
+
+```{r}
+model <- keras_model_sequential() %>%
+  feature_extractor %>%
+  layer_batch_normalization() %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_batch_normalization() %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 200, activation = "softmax")
+
+model %>% compile(
+  optimizer = "adam",
+  loss = "sparse_categorical_crossentropy",
+  metrics = list("accuracy")
+)
+```
+
+```{r}
+summary(model)
+```
+
+```{r}
+batch_size <- 10
+
+load_and_preprocess_image <- function(image_name, target_height, target_width) {
+  img_array <- image_load(
+    file.path(image_name),
+    target_size = c(target_height, target_width)
+    ) %>%
+    image_to_array() %>%
+    xception_preprocess_input() 
+  dim(img_array) <- c(1, dim(img_array))
+  img_array
+}
+
+classification_generator <-
+  function(data,
+           target_height,
+           target_width,
+           shuffle,
+           batch_size) {
+    i <- 1
+    function() {
+      if (shuffle) {
+        indices <- sample(1:nrow(data), size = batch_size)
+      } else {
+        if (i + batch_size >= nrow(data))
+          i <<- 1
+        indices <- c(i:min(i + batch_size - 1, nrow(data)))
+        i <<- i + length(indices)
+      }
+      x <-
+        array(0, dim = c(length(indices), target_height, target_width, 3))
+      y <- array(0, dim = c(length(indices)))
+      
+      for (j in 1:length(indices)) {
+        x[j, , , ] <-
+          load_and_preprocess_image(data[[indices[j], "filepath"]],
+                                    target_height, target_width)
+        y[j] <-
+          data[[indices[j], "Class_ID"]]
+      }
+      list(x, y)
+    }
+  }
+
+train_gen <- classification_generator(
+  df %>% filter(Training_Image == T),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = TRUE,
+  batch_size = batch_size
+)
+
+valid_gen <- classification_generator(
+  df %>% filter(Training_Image == F),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = TRUE,
+  batch_size = batch_size
+)
+```
+
+```{r}
+history <- model %>% fit(
+  train_gen,
+  epochs = 20,
+  steps_per_epoch = nrow(df %>% filter(Training_Image == T)) / batch_size,
+  validation_data = valid_gen,
+  validation_steps = nrow(df %>% filter(Training_Image == F)) / batch_size,
+  callbacks = list(
+    callback_model_checkpoint(
+      file.path("class_only", "weights.{epoch:02d}-{val_loss:.2f}.hdf5")
+    ),
+    callback_early_stopping(patience = 2)
+  )
+)
+```
+
+```{r}
+plot(history)
+```
+
+# Bounding boxes
+```{r}
+feature_extractor <- application_xception(
+  include_top = FALSE,
+  input_shape = c(224, 224, 3)
+)
+
+feature_extractor %>% freeze_weights()
+```
+
+```{r}
+model <- keras_model_sequential() %>%
+  feature_extractor %>%
+  layer_flatten() %>%
+  layer_batch_normalization() %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_batch_normalization() %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 4)
+```
+
+```{r}
+metric_iou <- function(y_true, y_pred) {
+  
+  # order is [x_left, y_top, x_right, y_bottom]
+  intersection_xmin <- k_maximum(y_true[ ,1], y_pred[ ,1])
+  intersection_ymin <- k_maximum(y_true[ ,2], y_pred[ ,2])
+  intersection_xmax <- k_minimum(y_true[ ,3], y_pred[ ,3])
+  intersection_ymax <- k_minimum(y_true[ ,4], y_pred[ ,4])
+  
+  area_intersection <- (intersection_xmax - intersection_xmin) * 
+                       (intersection_ymax - intersection_ymin)
+  area_y <- (y_true[ ,3] - y_true[ ,1]) * (y_true[ ,4] - y_true[ ,2])
+  area_yhat <- (y_pred[ ,3] - y_pred[ ,1]) * (y_pred[ ,4] - y_pred[ ,2])
+  area_union <- area_y + area_yhat - area_intersection
+  
+  iou <- area_intersection/area_union
+  k_mean(iou)
+  
+}
+```
+
+```{r}
+model %>% compile(
+  optimizer = "adam",
+  loss = "mae",
+  metrics = list(custom_metric("iou", metric_iou))
+)
+```
+
+
+```{r}
+localization_generator <-
+  function(data,
+           target_height,
+           target_width,
+           shuffle,
+           batch_size) {
+    i <- 1
+    function() {
+      if (shuffle) {
+        indices <- sample(1:nrow(data), size = batch_size)
+      } else {
+        if (i + batch_size >= nrow(data))
+          i <<- 1
+        indices <- c(i:min(i + batch_size - 1, nrow(data)))
+        i <<- i + length(indices)
+      }
+      x <-
+        array(0, dim = c(length(indices), target_height, target_width, 3))
+      y <- array(0, dim = c(length(indices), 4))
+      
+      for (j in 1:length(indices)) {
+        x[j, , , ] <-
+          load_and_preprocess_image(data[[indices[j], "filepath"]], 
+                                    target_height, target_width)
+        y[j, ] <-
+          data[indices[j], c("x_left_scaled",
+                             "y_top_scaled",
+                             "x_right_scaled",
+                             "y_bottom_scaled")] %>% as.matrix()
+      }
+      list(x, y)
+    }
+  }
+
+train_gen <- localization_generator(
+  df %>% filter(Training_Image == T),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = TRUE,
+  batch_size = batch_size
+)
+
+valid_gen <- localization_generator(
+  df %>% filter(Training_Image == F),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = FALSE,
+  batch_size = batch_size
+)
+```
+
+```{r}
+history <- model %>% fit(
+  train_gen,
+  epochs = 20,
+  steps_per_epoch = nrow(df %>% filter(Training_Image == T)) / batch_size,
+  validation_data = valid_gen,
+  validation_steps = nrow(df %>% filter(Training_Image == F)) / batch_size,
+  callbacks = list(
+    callback_model_checkpoint(
+      file.path("loc_only", "weights.{epoch:02d}-{val_loss:.2f}.hdf5")
+    ),
+    callback_early_stopping(patience = 2)
+  )
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+plot_image_with_boxes <- function(file_name,
+                                  object_class,
+                                  box,
+                                  scaled = FALSE,
+                                  class_pred = NULL,
+                                  box_pred = NULL) {
+  img <- image_read(file_name)
+  if(scaled) img <- image_resize(img, geometry = "224x224!")
+  img <- image_draw(img)
+  x_left <- box[1]
+  y_bottom <- box[2]
+  x_right <- box[3]
+  y_top <- box[4]
+  rect(
+    x_left,
+    y_bottom,
+    x_right,
+    y_top,
+    border = "cyan",
+    lwd = 2.5
+  )
+  if (!is.null(box_pred)){
+    rect(box_pred[1],
+         box_pred[2],
+         box_pred[3],
+         box_pred[4],
+         border = "yellow",
+         lwd = 2.5)
+  }
+  if (!is.null(class_pred)){
+    text(
+      box_pred[1],
+      box_pred[2],
+      class_pred,
+      offset = 0,
+      pos = 4,
+      cex = 1.5,
+      col = "yellow")
+  }
+  dev.off()
+  img %>% image_write(paste0("CUB_200_2011/preds_", object_class, ".jpg"))
+  plot(img)
+}
+```
+
+```{r}
+train_1_8 <- head(df %>% filter(Training_Image == T), 8) %>%
+  select(filepath,
+         name,
+         x_left_scaled, y_top_scaled, x_right_scaled, y_bottom_scaled)
+
+for (i in 1:8) {
+  preds <-
+    model %>% predict(
+      load_and_preprocess_image(train_1_8[i, "filepath"], 
+                                target_height, target_width),
+      batch_size = 1
+  )
+  plot_image_with_boxes(train_1_8$filepath[i],
+                        paste0("train_", i),
+                        train_1_8[i, 3:6] %>% as.matrix(),
+                        scaled = TRUE,
+                        box_pred = preds)
+}
+```
+
+```{r}
+validation_1_8 <- head(df %>% filter(Training_Image == F), 8) %>%
+  select(filepath,
+         name,
+         x_left_scaled, y_top_scaled, x_right_scaled, y_bottom_scaled)
+
+for (i in 1:8) {
+  preds <-
+    model %>% predict(
+      load_and_preprocess_image(validation_1_8[i, "filepath"], 
+                                target_height, target_width),
+      batch_size = 1
+  )
+  plot_image_with_boxes(validation_1_8$filepath[i],
+                        paste0("validation_",i),
+                        validation_1_8[i, 3:6] %>% as.matrix(),
+                        scaled = TRUE,
+                        box_pred = preds)
+}
+```
+
+
+```{r}
+feature_extractor <- application_xception(
+  include_top = FALSE,
+  input_shape = c(224, 224, 3)
+)
+
+input <- feature_extractor$input
+common <- feature_extractor$output %>%
+  layer_flatten(name = "flatten") %>%
+  layer_activation_relu() %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_batch_normalization() %>%
+  layer_dropout(rate = 0.5)
+
+regression_output <-
+  layer_dense(common, units = 4, name = "regression_output")
+class_output <- layer_dense(
+  common,
+  units = 200,
+  activation = "softmax",
+  name = "class_output"
+)
+
+model <- keras_model(
+  inputs = input,
+  outputs = list(regression_output, class_output)
+)
+```
+
+```{r}
+model %>% freeze_weights(to = "flatten")
+
+model %>% compile(
+  optimizer = "adam",
+  loss = list("mae", "sparse_categorical_crossentropy"),
+  #loss_weights = list(
+  #  regression_output = 0.05,
+  #  class_output = 0.95),
+  metrics = list(
+    regression_output = custom_metric("iou", metric_iou),
+    class_output = "accuracy"
+  )
+)
+```
+
+```{r}
+loc_class_generator <-
+  function(data,
+           target_height,
+           target_width,
+           shuffle,
+           batch_size) {
+    i <- 1
+    function() {
+      if (shuffle) {
+        indices <- sample(1:nrow(data), size = batch_size)
+      } else {
+        if (i + batch_size >= nrow(data))
+          i <<- 1
+        indices <- c(i:min(i + batch_size - 1, nrow(data)))
+        i <<- i + length(indices)
+      }
+      x <-
+        array(0, dim = c(length(indices), target_height, target_width, 3))
+      y1 <- array(0, dim = c(length(indices), 4))
+      y2 <- array(0, dim = c(length(indices)))
+      
+      for (j in 1:length(indices)) {
+        x[j, , , ] <-
+          load_and_preprocess_image(data[[indices[j], "filepath"]], 
+                                    target_height, target_width)
+        y1[j, ] <-
+          data[indices[j], c("x_left_scaled",
+                             "y_top_scaled",
+                             "x_right_scaled",
+                             "y_bottom_scaled")] %>% as.matrix()
+        y2[j] <-
+          data[[indices[j], "Class_ID"]]
+      }
+      list(x, list(y1, y2))
+    }
+  }
+
+train_gen <- loc_class_generator(
+  df %>% filter(Training_Image == T),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = TRUE,
+  batch_size = batch_size
+)
+
+valid_gen <- loc_class_generator(
+  df %>% filter(Training_Image == F),
+  target_height = target_height,
+  target_width = target_width,
+  shuffle = FALSE,
+  batch_size = batch_size
+)
+batch_size <- 10
+history <- model %>% fit(
+  train_gen,
+  epochs = 20,
+  steps_per_epoch = nrow(df %>% filter(Training_Image == T)) / batch_size,
+  validation_data = valid_gen,
+  validation_steps = nrow(df %>% filter(Training_Image == F)) / batch_size,
+  callbacks = list(
+    callback_model_checkpoint(
+      file.path("loc_class", "weights.{epoch:02d}-{val_loss:.2f}.hdf5")
+    ),
+    callback_early_stopping(patience = 2)
+  )
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+plot_image_with_boxes <- function(file_name,
+                                  object_class,
+                                  name,
+                                  box,
+                                  scaled = FALSE,
+                                  class_pred = NULL,
+                                  box_pred = NULL) {
+  img <- image_read(file_name)
+  if(scaled) img <- image_resize(img, geometry = "224x224!")
+  img <- image_draw(img)
+  x_left <- box[1]
+  y_bottom <- box[2]
+  x_right <- box[3]
+  y_top <- box[4]
+  rect(
+    x_left,
+    y_bottom,
+    x_right,
+    y_top,
+    border = "cyan",
+    lwd = 2.5
+  )
+  text(
+    x_left,
+    y_top,
+    object_class,
+    offset = 1,
+    pos = 2,
+    cex = 1.5,
+    col = "cyan"
+  )  
+  if (!is.null(box_pred)){
+    rect(box_pred[1],
+         box_pred[2],
+         box_pred[3],
+         box_pred[4],
+         border = "yellow",
+         lwd = 2.5)
+  }
+  if (!is.null(class_pred)){
+    text(
+      box_pred[1],
+      box_pred[2],
+      class_pred,
+      offset = 0,
+      pos = 4,
+      cex = 1.5,
+      col = "yellow")
+  }
+  dev.off()
+  img %>% image_write(paste0("CUB_200_2011/preds_", name, ".jpg"))
+  plot(img)
+}
+```
+
+```{r}
+train_1_8 <- df %>% filter(Training_Image == T) %>%
+  select(filepath,
+         name,
+         x_left_scaled, y_top_scaled, x_right_scaled, y_bottom_scaled)
+
+for (i in sample(1:nrow(train_1_8),8)) {
+  preds <-
+    model %>% predict(
+      load_and_preprocess_image(train_1_8[i, "filepath"], 
+                                target_height, target_width),
+      batch_size = 1
+  )
+  class_id <- df %>% filter(Class_ID == (which(unlist(preds[2]) == max(unlist(preds[2])))-1)) %>% select(name) %>% head(1) %>% pull()
+  plot_image_with_boxes(train_1_8$filepath[i],
+                        class_id,
+                        paste0("train_", i),
+                        train_1_8[i, 3:6] %>% as.matrix(),
+                        scaled = TRUE,
+                        class_pred = class_id,
+                        box_pred = unlist(preds[1])
+  )
+}
+```
+
+# Check preds to truth
+
+```{r}
+test_images <- df %>% filter(Training_Image == F) %>%
+  select(filepath,
+         name,
+         Class_ID,
+         x_left_scaled,
+         y_top_scaled,
+         x_right_scaled,
+         y_bottom_scaled)
+
+test_images$prediction <- NA
+
+for (i in 1:nrow(test_images)) {
+  preds <-
+    model %>% predict(
+      load_and_preprocess_image(test_images[i, "filepath"], 
+                                target_height, target_width),
+      batch_size = 1
+  )
+  pred_class_id <- which(unlist(preds[2]) == max(unlist(preds[2])))
+  test_images$prediction[i] <- pred_class_id - 1
+}
+
+sum(test_images$Class_ID == test_images$prediction)/nrow(test_images)
+```
+
