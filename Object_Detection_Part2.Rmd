@@ -617,7 +617,7 @@ summary(model)
 
 ```{r}
 # shapes are batch_size * 16 * 21
-n_classes <- 21
+n_classes <- 20 # IS IT 20 OR 21? I Feel like should be 20
 class_loss <- function(y_true, y_pred) {
 
   class_loss  <-
