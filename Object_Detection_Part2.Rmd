@@ -618,6 +618,7 @@ summary(model)
 ```{r}
 # shapes are batch_size * 16 * 20
 n_classes <- 20
+
 class_loss <- function(y_true, y_pred) {
 
   class_loss  <-
