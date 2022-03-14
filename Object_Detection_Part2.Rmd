@@ -616,8 +616,8 @@ summary(model)
 ```
 
 ```{r}
-# shapes are batch_size * 16 * 21
-n_classes <- 21
+# shapes are batch_size * 16 * 20
+n_classes <- 20
 class_loss <- function(y_true, y_pred) {
 
   class_loss  <-
@@ -681,6 +681,8 @@ model %>% fit(
   )
 )
 ```
+
+
 
 ```{r}
 alpha <- 0.25
